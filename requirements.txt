@@ -1,0 +1,8 @@
+numpy
+catboost
+scikit-learn
+librosa
+soundfile
+torch
+tqdm
+wandb

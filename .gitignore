@@ -1,0 +1,6 @@
+__pycache__/
+jan-2026-dl-gen-ai-project/
+outputs/
+logs/
+*.pyc
+.vscode/

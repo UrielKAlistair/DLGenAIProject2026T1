@@ -1,0 +1,224 @@
+from __future__ import annotations
+
+import json
+import random
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List
+
+import librosa
+import numpy as np
+import soundfile as sf
+import torch
+from torch.utils.data import Dataset
+
+GENRES = [
+    "blues",
+    "classical",
+    "country",
+    "disco",
+    "hiphop",
+    "jazz",
+    "metal",
+    "pop",
+    "reggae",
+    "rock",
+]
+
+STEM_NAMES = ("drums", "vocals", "bass", "other")
+
+@dataclass(frozen=True)
+class SongItem:
+    genre: str
+    song_id: str
+    stem_paths: Dict[str, Path]
+
+
+def seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
+def make_output_dir(output_root: Path, run_name: str | None, default_prefix: str) -> Path:
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    output_dir = output_root / (run_name or f"{timestamp}_{default_prefix}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+
+def save_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+
+
+def full_train_val(dataset_root: Path, val_ratio: float, seed: int) -> Dict[str, object]:
+    if not (dataset_root / "genres_stems").exists():
+        raise FileNotFoundError(f"Expected {dataset_root / 'genres_stems'}")
+
+    songs_by_genre = get_song_dict(dataset_root)
+    train_split, val_split = train_val_split(songs_by_genre, val_ratio, seed)
+
+    print("Train/val split:")
+    for genre in GENRES:
+        if genre in train_split or genre in val_split:
+            num_train = len(train_split.get(genre, []))
+            num_val = len(val_split.get(genre, []))
+            print(f"  {genre}: train={num_train}, val={num_val}")
+
+    return train_split, val_split
+
+def get_song_dict(dataset_root: Path) -> Dict[str, List[SongItem]]:
+    songs_by_genre: Dict[str, List[SongItem]] = {}
+    stems_root = dataset_root / "genres_stems"
+
+    for genre in GENRES:
+        genre_dir = stems_root / genre
+        if not genre_dir.exists():
+            continue
+
+        genre_songs: List[SongItem] = []
+        for song_dir in sorted(path for path in genre_dir.iterdir() if path.is_dir()):
+            stem_paths: Dict[str, Path] = {}
+            for stem_name in STEM_NAMES:
+                if stem_name == "other":
+                    stem_path = song_dir / "other.wav"
+                    if not stem_path.exists():
+                        stem_path = song_dir / "others.wav"
+                else:
+                    stem_path = song_dir / f"{stem_name}.wav"
+
+                if not stem_path.exists():
+                    raise FileNotFoundError(f"Missing {stem_name} stem under {song_dir}")
+
+                stem_paths[stem_name] = stem_path
+
+            genre_songs.append(SongItem(genre=genre, song_id=song_dir.name, stem_paths=stem_paths))
+
+        songs_by_genre[genre] = genre_songs
+
+    return songs_by_genre
+
+def train_val_split(
+    songs_by_genre: Dict[str, List[SongItem]],
+    val_ratio: float,
+    seed: int,
+) -> tuple[Dict[str, List[SongItem]], Dict[str, List[SongItem]]]:
+    rng = random.Random(seed)
+    train_split: Dict[str, List[SongItem]] = {}
+    val_split: Dict[str, List[SongItem]] = {}
+
+    for genre, songs in songs_by_genre.items():
+        shuffled = songs[:]
+        rng.shuffle(shuffled)
+        if len(shuffled) < 2:
+            train_split[genre] = shuffled
+            val_split[genre] = []
+            continue
+
+        val_count = max(1, int(round(len(shuffled) * val_ratio)))
+        val_count = min(val_count, len(shuffled) - 1)
+
+        val_split[genre] = shuffled[:val_count]
+        train_split[genre] = shuffled[val_count:]
+
+    return train_split, val_split
+
+
+def load_audio(path: Path, sample_rate: int) -> torch.Tensor:
+    waveform_np, source_sr = sf.read(str(path), always_2d=True)
+    waveform = torch.from_numpy(waveform_np.T).float()
+    waveform = waveform.mean(dim=0)
+
+    if source_sr != sample_rate:
+        waveform = torch.from_numpy(
+            librosa.resample(waveform.numpy(), orig_sr=source_sr, target_sr=sample_rate)
+        ).float()
+
+    return waveform
+
+
+def fit_clip(waveform: torch.Tensor, target_length: int, rng: random.Random) -> torch.Tensor:
+    if waveform.numel() == target_length:
+        return waveform
+
+    if waveform.numel() < target_length:
+        repeats = (target_length + waveform.numel() - 1) // waveform.numel()
+        waveform = waveform.repeat(repeats)
+        return waveform[:target_length]
+
+    max_offset = waveform.numel() - target_length
+    offset = rng.randint(0, max_offset)
+    return waveform[offset : offset + target_length]
+
+
+class SyntheticMashupDataset(Dataset):
+    def __init__(
+        self,
+        songs_by_genre: Dict[str, List[SongItem]],
+        num_samples: int,
+        sample_rate: int,
+        clip_seconds: float,
+        seed: int,
+    ) -> None:
+        self.songs_by_genre = songs_by_genre
+        self.num_samples = num_samples
+        self.sample_rate = sample_rate
+        self.target_length = int(sample_rate * clip_seconds)
+        self.seed = seed
+        self.genre_names = [genre for genre, songs in songs_by_genre.items() if songs]
+        if not self.genre_names:
+            raise ValueError("SyntheticMashupDataset needs at least one genre with songs.")
+
+    def __len__(self) -> int:
+        return self.num_samples
+
+    def _rng(self, index: int) -> random.Random:
+        return random.Random(self.seed + 1009 * index)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        rng = self._rng(index)
+        genre = self.genre_names[index % len(self.genre_names)]
+        songs = self.songs_by_genre[genre]
+
+        stems: List[torch.Tensor] = []
+        for stem_name in STEM_NAMES:
+            song = rng.choice(songs)
+            waveform = load_audio(song.stem_paths[stem_name], self.sample_rate)
+            waveform = fit_clip(waveform, self.target_length, rng)
+            stems.append(waveform)
+
+        mix = torch.stack(stems, dim=0).sum(dim=0)
+        peak = mix.abs().max().clamp_min(1e-6)
+        mix = mix / peak
+        label = torch.tensor(GENRES.index(genre), dtype=torch.long)
+        return mix.unsqueeze(0), label
+
+
+
+def init_wandb(
+    project: str,
+    entity: str | None,
+    mode: str,
+    run_name: str | None,
+    config: Dict[str, object],
+    output_dir: Path,
+):
+    if mode == "disabled":
+        return None
+
+    try:
+        import wandb
+    except ImportError:
+        return None
+
+    return wandb.init(
+        project=project,
+        entity=entity,
+        mode=mode,
+        name=run_name or output_dir.name,
+        config=config,
+        dir=str(output_dir),
+    )
