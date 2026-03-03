@@ -4,13 +4,14 @@ import json
 import random
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List
 
-import librosa
 import numpy as np
 import soundfile as sf
 import torch
+from torchaudio.functional import resample
 from torch.utils.data import Dataset
 
 GENRES = [
@@ -128,14 +129,18 @@ def train_val_split(
 
 
 def load_audio(path: Path, sample_rate: int) -> torch.Tensor:
+    return _load_audio_cached(str(path), sample_rate).clone()
+
+
+@lru_cache(maxsize=4000)
+def _load_audio_cached(path_str: str, sample_rate: int) -> torch.Tensor:
+    path = Path(path_str)
     waveform_np, source_sr = sf.read(str(path), always_2d=True)
     waveform = torch.from_numpy(waveform_np.T).float()
     waveform = waveform.mean(dim=0)
 
     if source_sr != sample_rate:
-        waveform = torch.from_numpy(
-            librosa.resample(waveform.numpy(), orig_sr=source_sr, target_sr=sample_rate)
-        ).float()
+        waveform = resample(waveform.unsqueeze(0), orig_freq=source_sr, new_freq=sample_rate).squeeze(0)
 
     return waveform
 
