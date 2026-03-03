@@ -20,3 +20,25 @@ python -m DnG.mmfc_trees.infer_test \
 ```
 
 Kaggle public score ***0.52913***
+
+#Stage 2
+
+Scratch CNN on log-mel spectrograms, still trained on the same synthetic same-genre mashups.
+
+```
+python -m DnG.cnn.train_cnn \
+    --dataset-root DnG/jan-2026-dl-gen-ai-project/messy_mashup \
+    --output-root DnG/cnn/outputs \
+    --run-name cnn_v1
+```
+
+and inference with
+
+```
+python -m DnG.cnn.infer_cnn \
+    --dataset-root DnG/jan-2026-dl-gen-ai-project/messy_mashup \
+    --model-path DnG/cnn/outputs/cnn_v1/model.pt \
+    --summary-path DnG/cnn/outputs/cnn_v1/summary.json \
+    --output-path DnG/cnn/outputs/cnn_v1/submission.csv
+```
+
