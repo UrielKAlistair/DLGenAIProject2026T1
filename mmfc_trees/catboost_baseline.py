@@ -12,6 +12,7 @@ from sklearn.metrics import accuracy_score, f1_score
 from ..common.utils import (
     SyntheticMashupDataset,
     full_train_val,
+    get_noise_paths,
     init_wandb,
     make_output_dir,
     save_json,
@@ -74,6 +75,7 @@ def main() -> None:
     dataset_root = args.dataset_root.expanduser().resolve()
 
     train_split, val_split = full_train_val(dataset_root, VAL_RATIO, SEED)
+    noise_paths = get_noise_paths(dataset_root)
 
     train_dataset = SyntheticMashupDataset(
         songs_by_genre=train_split,
@@ -81,6 +83,7 @@ def main() -> None:
         sample_rate=SAMPLE_RATE,
         clip_seconds=CLIP_SECONDS,
         seed=SEED,
+        noise_paths=noise_paths,
     )
     val_dataset = SyntheticMashupDataset(
         songs_by_genre=val_split,
@@ -88,6 +91,7 @@ def main() -> None:
         sample_rate=SAMPLE_RATE,
         clip_seconds=CLIP_SECONDS,
         seed=SEED + 999,
+        noise_paths=noise_paths,
     )
 
     print("Extracting MFCC features...")

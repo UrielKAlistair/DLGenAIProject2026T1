@@ -39,37 +39,3 @@ class LogMelFrontend(nn.Module):
         mean = log_mel.mean(dim=(-2, -1), keepdim=True)
         std = log_mel.std(dim=(-2, -1), keepdim=True).clamp_min(1e-6)
         return ((log_mel - mean) / std).unsqueeze(1)
-
-
-def waveform_to_log_mel(
-    waveform: np.ndarray,
-    sample_rate: int,
-    n_mels: int,
-    hop_length: int,
-    n_fft: int = 2048,
-) -> torch.Tensor:
-    frontend = LogMelFrontend(sample_rate=sample_rate, n_mels=n_mels, hop_length=hop_length, n_fft=n_fft)
-    waveform_tensor = torch.from_numpy(waveform.astype(np.float32)).unsqueeze(0)
-    return frontend(waveform_tensor).squeeze(0)
-
-
-class SmallMashupCNN(nn.Module):
-    def __init__(self, num_classes: int) -> None:
-        super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(16, 32, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1, 1)),
-        )
-        self.classifier = nn.Linear(64, num_classes)
-
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        features = self.features(inputs)
-        features = features.flatten(start_dim=1)
-        return self.classifier(features)

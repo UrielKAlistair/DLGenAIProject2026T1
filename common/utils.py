@@ -11,6 +11,7 @@ from typing import Dict, List
 import numpy as np
 import soundfile as sf
 import torch
+import torch.nn.functional as F
 from torchaudio.functional import resample
 from torch.utils.data import Dataset
 
@@ -40,6 +41,11 @@ def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def make_output_dir(output_root: Path, run_name: str | None, default_prefix: str) -> Path:
@@ -102,6 +108,13 @@ def get_song_dict(dataset_root: Path) -> Dict[str, List[SongItem]]:
 
     return songs_by_genre
 
+
+def get_noise_paths(dataset_root: Path) -> List[Path]:
+    noise_root = dataset_root / "ESC-50-master" / "audio"
+    if not noise_root.exists():
+        return []
+    return sorted(noise_root.rglob("*.wav"))
+
 def train_val_split(
     songs_by_genre: Dict[str, List[SongItem]],
     val_ratio: float,
@@ -145,18 +158,14 @@ def _load_audio_cached(path_str: str, sample_rate: int) -> torch.Tensor:
     return waveform
 
 
-def fit_clip(waveform: torch.Tensor, target_length: int, rng: random.Random) -> torch.Tensor:
+def fit_clip(waveform: torch.Tensor, target_length: int) -> torch.Tensor:
     if waveform.numel() == target_length:
         return waveform
 
     if waveform.numel() < target_length:
-        repeats = (target_length + waveform.numel() - 1) // waveform.numel()
-        waveform = waveform.repeat(repeats)
-        return waveform[:target_length]
+        return F.pad(waveform, (0, target_length - waveform.numel()))
 
-    max_offset = waveform.numel() - target_length
-    offset = rng.randint(0, max_offset)
-    return waveform[offset : offset + target_length]
+    return waveform[:target_length]
 
 
 class SyntheticMashupDataset(Dataset):
@@ -167,12 +176,14 @@ class SyntheticMashupDataset(Dataset):
         sample_rate: int,
         clip_seconds: float,
         seed: int,
+        noise_paths: List[Path] | None = None,
     ) -> None:
         self.songs_by_genre = songs_by_genre
         self.num_samples = num_samples
         self.sample_rate = sample_rate
         self.target_length = int(sample_rate * clip_seconds)
         self.seed = seed
+        self.noise_paths = list(noise_paths or [])
         self.genre_names = [genre for genre, songs in songs_by_genre.items() if songs]
         if not self.genre_names:
             raise ValueError("SyntheticMashupDataset needs at least one genre with songs.")
@@ -183,19 +194,39 @@ class SyntheticMashupDataset(Dataset):
     def _rng(self, index: int) -> random.Random:
         return random.Random(self.seed + 1009 * index)
 
+    def _sample_songs(self, songs: List[SongItem], rng: random.Random) -> List[SongItem]:
+        if len(songs) >= len(STEM_NAMES):
+            return rng.sample(songs, len(STEM_NAMES))
+        return [rng.choice(songs) for _ in STEM_NAMES]
+
+    def _add_noise(self, mix: torch.Tensor, rng: random.Random) -> torch.Tensor:
+        if not self.noise_paths:
+            return mix
+
+        noise = load_audio(rng.choice(self.noise_paths), self.sample_rate)
+        if noise.numel() > self.target_length:
+            noise = noise[: self.target_length]
+
+        start_idx = rng.randint(0, self.target_length - noise.numel())
+        intensity = rng.uniform(0.1, 0.4)
+        mixed = mix.clone()
+        mixed[start_idx : start_idx + noise.numel()] += noise * intensity
+        return mixed
+
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
         rng = self._rng(index)
         genre = self.genre_names[index % len(self.genre_names)]
         songs = self.songs_by_genre[genre]
+        chosen_songs = self._sample_songs(songs, rng)
 
         stems: List[torch.Tensor] = []
-        for stem_name in STEM_NAMES:
-            song = rng.choice(songs)
+        for song, stem_name in zip(chosen_songs, STEM_NAMES):
             waveform = load_audio(song.stem_paths[stem_name], self.sample_rate)
-            waveform = fit_clip(waveform, self.target_length, rng)
+            waveform = fit_clip(waveform, self.target_length)
             stems.append(waveform)
 
         mix = torch.stack(stems, dim=0).sum(dim=0)
+        mix = self._add_noise(mix, rng)
         peak = mix.abs().max().clamp_min(1e-6)
         mix = mix / peak
         label = torch.tensor(GENRES.index(genre), dtype=torch.long)

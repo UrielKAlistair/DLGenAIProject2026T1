@@ -9,35 +9,23 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-try:
-    from ..common.utils import GENRES, load_audio
-    from .model import LogMelFrontend, SmallMashupCNN
-except ImportError:
-    import sys
-
-    sys.path.append(str(Path(__file__).resolve().parents[1]))
-    from common.utils import GENRES, load_audio
-    from cnn.model import LogMelFrontend, SmallMashupCNN
+from ..common.features import LogMelFrontend
+from .models import build_model
+from ..common.utils import GENRES, load_audio
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run CNN inference on test mashups.")
+def parse_args(fixed_model: str | None) -> argparse.Namespace:
+    description = "Run spectrogram-model inference on test mashups."
+    if fixed_model is not None:
+        description = f"Run {fixed_model.upper()} inference on test mashups."
+
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dataset-root", type=Path, required=True)
-    parser.add_argument(
-        "--model-path",
-        type=Path,
-        default=Path("DnG/cnn/outputs/cnn_v1/model.pt"),
-    )
-    parser.add_argument(
-        "--summary-path",
-        type=Path,
-        default=Path("DnG/cnn/outputs/cnn_v1/summary.json"),
-    )
-    parser.add_argument(
-        "--output-path",
-        type=Path,
-        default=Path("DnG/cnn/outputs/cnn_v1/submission.csv"),
-    )
+    parser.add_argument("--model-path", type=Path, required=True)
+    parser.add_argument("--summary-path", type=Path, required=True)
+    parser.add_argument("--output-path", type=Path, required=True)
+    if fixed_model is None:
+        parser.add_argument("--model", choices=["cnn", "crnn"], required=True)
     return parser.parse_args()
 
 
@@ -47,15 +35,16 @@ def fit_clip_for_inference(waveform: np.ndarray, sample_rate: int, clip_seconds:
         return waveform
 
     if waveform.shape[0] < target_length:
-        repeats = (target_length + waveform.shape[0] - 1) // waveform.shape[0]
-        waveform = np.tile(waveform, repeats)
-        return waveform[:target_length]
+        padded = np.zeros(target_length, dtype=np.float32)
+        padded[: waveform.shape[0]] = waveform.astype(np.float32)
+        return padded
 
-    start = (waveform.shape[0] - target_length) // 2
-    return waveform[start : start + target_length]
+    return waveform[:target_length]
 
-def main() -> None:
-    args = parse_args()
+
+def main(fixed_model: str | None = None) -> None:
+    args = parse_args(fixed_model)
+    model_name = fixed_model or args.model
     dataset_root = args.dataset_root.expanduser().resolve()
     model_path = args.model_path.expanduser().resolve()
     summary_path = args.summary_path.expanduser().resolve()
@@ -72,7 +61,7 @@ def main() -> None:
         hop_length=int(config["hop_length"]),
         n_fft=int(config.get("n_fft", 2048)),
     ).to(device)
-    model = SmallMashupCNN(num_classes=len(GENRES)).to(device)
+    model = build_model(model_name, num_classes=len(GENRES), n_mels=int(config["n_mels"])).to(device)
     state_dict = torch.load(model_path, map_location=device)
     model.load_state_dict(state_dict)
     frontend.eval()
