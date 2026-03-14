@@ -24,23 +24,7 @@ Kaggle public score ***0.52913***
 # Stage 2
 
 Scratch CNN on log-mel spectrograms, still trained on the same synthetic same-genre mashups. Migrated audio resampling to torchaudio to gani GPU speedup. Tried out a very small CNN just as a proof of concept for upcoming models.
-
-```
-python -m DnG.cnn.train_cnn \
-    --dataset-root DnG/jan-2026-dl-gen-ai-project/messy_mashup \
-    --output-root DnG/cnn/outputs \
-    --run-name cnn_v1
-```
-
-and inference with
-
-```
-python -m DnG.cnn.infer_cnn \
-    --dataset-root DnG/jan-2026-dl-gen-ai-project/messy_mashup \
-    --model-path DnG/cnn/outputs/cnn_v1/model.pt \
-    --summary-path DnG/cnn/outputs/cnn_v1/summary.json \
-    --output-path DnG/cnn/outputs/cnn_v1/submission.csv
-```
+***the code snippets here have been removed as they are no longer compatible with the latest version of the repo. See An older commit if you wish to recreate the basic CNN run, but a better base CNN is avaialbe after the refactor in Stage 3.***
 
 # Stage 3
 
@@ -49,9 +33,15 @@ Proper synthetic data generation pipeline courtesy of https://github.com/Photon-
 CRNN code has been merged into the CNN pipeline and common utilites got extracted out and dropped in common. Code is a lot more structured. To recreate my run, use:
 
 ```
-python -m DnG.train_spectrogram \
-    --model crnn \
-    --dataset-root DnG/jan-2026-dl-gen-ai-project/messy_mashup \
-    --output-root DnG/crnn/outputs \
-    --run-name crnn_v1
+python -m DnG.cnn_crnn.train \
+--dataset-root DnG/messy_mashup \
+--output-root DnG/CNNs/outputs \
+--model cnn \
+--run-name cnn_comparison
 ```
+
+# Stage 4 
+
+EfficientNET uses the vast majority of preexisting code without major changes. Until This point, I had not seriously bothered tuning hyperparameters, as I dont expect a vanilla CNN or CRNN to outperform EfficientNET and I wanted to save my GPU time for tuning the best possible model. 
+
+This commit merely introduces EfficientNET with some params and checks if it runs

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+from torchvision import models
 
 
 class SmallMashupCNN(nn.Module):
@@ -60,9 +61,23 @@ class SmallMashupCRNN(nn.Module):
         return self.classifier(pooled)
 
 
-def build_model(model_name: str, num_classes: int, n_mels: int) -> nn.Module:
+class EfficientNetClassifier(nn.Module):
+    def __init__(self, num_classes: int, pretrained: bool = False) -> None:
+        super().__init__()
+        weights = models.EfficientNet_B0_Weights.DEFAULT if pretrained else None
+        self.backbone = models.efficientnet_b0(weights=weights)
+        in_features = self.backbone.classifier[1].in_features
+        self.backbone.classifier[1] = nn.Linear(in_features, num_classes)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self.backbone(inputs.repeat(1, 3, 1, 1))
+
+
+def build_model(model_name: str, num_classes: int, n_mels: int, pretrained: bool = False) -> nn.Module:
     if model_name == "cnn":
         return SmallMashupCNN(num_classes=num_classes)
     if model_name == "crnn":
         return SmallMashupCRNN(num_classes=num_classes, n_mels=n_mels)
+    if model_name == "efficientnet":
+        return EfficientNetClassifier(num_classes=num_classes, pretrained=pretrained)
     raise ValueError(f"Unsupported model: {model_name}")

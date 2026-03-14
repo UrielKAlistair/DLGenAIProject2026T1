@@ -110,6 +110,12 @@ def train_model(
 ) -> None:
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.CrossEntropyLoss()
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="max",
+        factor=0.5,
+        patience=2,
+    )
 
     wandb_run = init_wandb(
         project=wandb_project,
@@ -145,12 +151,14 @@ def train_model(
             epoch,
             num_epochs,
         )
+        scheduler.step(val_metrics["macro_f1"])
         epoch_seconds = time.time() - epoch_start
 
         print(
             f"epoch {epoch}/{num_epochs} "
             f"train_loss={train_loss_value:.4f} val_loss={val_loss_value:.4f} "
             f"train_f1={train_metrics['macro_f1']:.4f} val_f1={val_metrics['macro_f1']:.4f} "
+            f"lr={optimizer.param_groups[0]['lr']:.2e} "
             f"time={epoch_seconds / 60:.1f}m"
         )
 
@@ -170,6 +178,7 @@ def train_model(
                     "train_macro_f1": train_metrics["macro_f1"],
                     "val_accuracy": val_metrics["accuracy"],
                     "val_macro_f1": val_metrics["macro_f1"],
+                    "learning_rate": optimizer.param_groups[0]["lr"],
                     "epoch_seconds": epoch_seconds,
                 }
             )

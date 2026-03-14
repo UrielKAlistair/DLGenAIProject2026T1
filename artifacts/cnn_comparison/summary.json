@@ -1,0 +1,26 @@
+{
+  "config": {
+    "model": "cnn",
+    "val_ratio": 0.2,
+    "train_samples": 1500,
+    "val_samples": 400,
+    "num_epochs": 12,
+    "batch_size": 64,
+    "learning_rate": 0.001,
+    "sample_rate": 22050,
+    "clip_seconds": 30.0,
+    "n_mels": 128,
+    "hop_length": 512,
+    "n_fft": 2048,
+    "num_workers": 8
+  },
+  "best_epoch": 10,
+  "best_train_metrics": {
+    "accuracy": 0.4126666666666667,
+    "macro_f1": 0.387918166950915
+  },
+  "best_val_metrics": {
+    "accuracy": 0.425,
+    "macro_f1": 0.37461327758811536
+  }
+}

@@ -25,7 +25,7 @@ def parse_args(fixed_model: str | None) -> argparse.Namespace:
     parser.add_argument("--summary-path", type=Path, required=True)
     parser.add_argument("--output-path", type=Path, required=True)
     if fixed_model is None:
-        parser.add_argument("--model", choices=["cnn", "crnn"], required=True)
+        parser.add_argument("--model", choices=["cnn", "crnn", "efficientnet"], required=True)
     return parser.parse_args()
 
 
@@ -61,7 +61,12 @@ def main(fixed_model: str | None = None) -> None:
         hop_length=int(config["hop_length"]),
         n_fft=int(config.get("n_fft", 2048)),
     ).to(device)
-    model = build_model(model_name, num_classes=len(GENRES), n_mels=int(config["n_mels"])).to(device)
+    model = build_model(
+        model_name,
+        num_classes=len(GENRES),
+        n_mels=int(config["n_mels"]),
+        pretrained=False,
+    ).to(device)
     state_dict = torch.load(model_path, map_location=device)
     model.load_state_dict(state_dict)
     frontend.eval()

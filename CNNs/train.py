@@ -43,12 +43,21 @@ MODEL_CONFIGS = {
         "num_epochs": 12,
         "batch_size": 64,
         "learning_rate": 1e-3,
+        "pretrained": False,
     },
     "crnn": {
         "default_prefix": "crnn_mel",
-        "num_epochs": 15,
+        "num_epochs": 10,
         "batch_size": 32,
-        "learning_rate": 7e-4,
+        "learning_rate": 1e-3,
+        "pretrained": False,
+    },
+    "efficientnet": {
+        "default_prefix": "efficientnet_b0",
+        "num_epochs": 10,
+        "batch_size": 32,
+        "learning_rate": 5e-4,
+        "pretrained": False,
     },
 }
 def parse_args() -> argparse.Namespace:
@@ -102,7 +111,12 @@ def main() -> None:
     val_loader = DataLoader(val_waveforms, shuffle=False, **loader_kwargs)
 
     frontend = LogMelFrontend(SAMPLE_RATE, N_MELS, HOP_LENGTH, N_FFT).to(device)
-    model = build_model(model_name, num_classes=len(GENRES), n_mels=N_MELS).to(device)
+    model = build_model(
+        model_name,
+        num_classes=len(GENRES),
+        n_mels=N_MELS,
+        pretrained=model_config["pretrained"],
+    ).to(device)
     config = {
         "model": model_name,
         "val_ratio": VAL_RATIO,
@@ -117,6 +131,7 @@ def main() -> None:
         "hop_length": HOP_LENGTH,
         "n_fft": N_FFT,
         "num_workers": NUM_WORKERS,
+        "pretrained": model_config["pretrained"],
     }
     train_model(
         frontend,
