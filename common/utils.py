@@ -77,6 +77,7 @@ def full_train_val(dataset_root: Path, val_ratio: float, seed: int) -> Dict[str,
 
     return train_split, val_split
 
+
 def get_song_dict(dataset_root: Path) -> Dict[str, List[SongItem]]:
     songs_by_genre: Dict[str, List[SongItem]] = {}
     stems_root = dataset_root / "genres_stems"
@@ -114,6 +115,7 @@ def get_noise_paths(dataset_root: Path) -> List[Path]:
     if not noise_root.exists():
         return []
     return sorted(noise_root.rglob("*.wav"))
+
 
 def train_val_split(
     songs_by_genre: Dict[str, List[SongItem]],
@@ -164,6 +166,19 @@ def fit_clip(waveform: torch.Tensor, target_length: int) -> torch.Tensor:
 
     if waveform.numel() < target_length:
         return F.pad(waveform, (0, target_length - waveform.numel()))
+
+    return waveform[:target_length]
+
+
+def fit_clip_for_inference(waveform: np.ndarray, sample_rate: int, clip_seconds: float) -> np.ndarray:
+    target_length = int(sample_rate * clip_seconds)
+    if waveform.shape[0] == target_length:
+        return waveform
+
+    if waveform.shape[0] < target_length:
+        padded = np.zeros(target_length, dtype=np.float32)
+        padded[: waveform.shape[0]] = waveform.astype(np.float32)
+        return padded
 
     return waveform[:target_length]
 

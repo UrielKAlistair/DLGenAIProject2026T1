@@ -10,7 +10,6 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from ..common.features import LogMelFrontend
-from .models import build_model
 from ..common.torch_trainer import load_checkpoint, train_one_epoch, val_loss
 from ..common.utils import (
     GENRES,
@@ -22,6 +21,7 @@ from ..common.utils import (
     save_json,
     seed_everything,
 )
+from .model import EfficientNetClassifier
 
 SAMPLE_RATE = 22050
 CLIP_SECONDS = 30.0
@@ -35,52 +35,51 @@ VAL_RATIO = 0.2
 TRAIN_SAMPLES = 1500
 VAL_SAMPLES = 400
 
+NUM_EPOCHS = 10
+BATCH_SIZE = 32
+LEARNING_RATE = 5e-4
+FINETUNE_LEARNING_RATE = 1e-4
+
 N_MELS = 128
 HOP_LENGTH = 512
 N_FFT = 2048
-NUM_WORKERS = min(3, os.cpu_count() or 1)
+NUM_WORKERS = min(8, os.cpu_count() or 1)
 PREFETCH_FACTOR = 2
-
-MODEL_CONFIGS = {
-    "cnn": {
-        "num_epochs": 12,
-        "batch_size": 64,
-        "learning_rate": 1e-3,
-    },
-    "crnn": {
-        "num_epochs": 10,
-        "batch_size": 32,
-        "learning_rate": 1e-3,
-    },
-}
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train a spectrogram model on synthetic mashups.")
+    parser = argparse.ArgumentParser(description="Train EfficientNet on synthetic mashup log-mels.")
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, default=Path("outputs"))
     parser.add_argument("--run-name", type=str, default=None)
-    parser.add_argument("--model", choices=sorted(MODEL_CONFIGS), required=True)
-    parser.add_argument("--num-epochs", type=int, default=None)
+    parser.add_argument("--num-epochs", type=int, default=NUM_EPOCHS)
     parser.add_argument("--resume-from", type=Path, default=None)
+    parser.add_argument("--pretrained", action="store_true")
+    parser.add_argument("--freeze-backbone-epochs", type=int, default=0)
+    parser.add_argument("--finetune-learning-rate", type=float, default=FINETUNE_LEARNING_RATE)
     return parser.parse_args()
 
 
 def train_model(
     frontend: nn.Module,
-    model: nn.Module,
+    model: EfficientNetClassifier,
     train_loader: DataLoader,
     val_loader: DataLoader,
     output_dir: Path,
-    config: dict[str, float | int | str],
+    config: dict[str, float | int | bool | str],
     run_name: str | None,
     device: torch.device,
     *,
     num_epochs: int,
     learning_rate: float,
     resume_from: Path | None,
+    unfreeze_epoch: int | None,
+    finetune_learning_rate: float | None,
 ) -> None:
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(
+        (parameter for parameter in model.parameters() if parameter.requires_grad),
+        lr=learning_rate,
+    )
     criterion = nn.CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
@@ -113,6 +112,21 @@ def train_model(
         print(f"Resuming from {resume_from}")
 
     for epoch in range(start_epoch, num_epochs + 1):
+        if unfreeze_epoch is not None and epoch == unfreeze_epoch:
+            model.unfreeze_backbone()
+            new_learning_rate = finetune_learning_rate or learning_rate
+            optimizer = torch.optim.Adam(
+                (parameter for parameter in model.parameters() if parameter.requires_grad),
+                lr=new_learning_rate,
+            )
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode="max",
+                factor=0.5,
+                patience=2,
+            )
+            print(f"Unfroze backbone at epoch {epoch}. Reset optimizer lr to {new_learning_rate:.2e}")
+
         epoch_start = time.time()
         train_loss_value, train_metrics = train_one_epoch(
             frontend,
@@ -189,14 +203,11 @@ def train_model(
         wandb_run.summary["best_val_macro_f1"] = best_val_metrics["macro_f1"]
         wandb_run.finish()
 
+
 def main() -> None:
     args = parse_args()
-    model_name = args.model
-    model_config = MODEL_CONFIGS[model_name]
-    num_epochs = args.num_epochs or model_config["num_epochs"]
-
     seed_everything(SEED)
-    output_dir = make_output_dir(args.output_root, args.run_name, model_name)
+    output_dir = make_output_dir(args.output_root, args.run_name, "efficientnet_b0")
     dataset_root = args.dataset_root.expanduser().resolve()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -221,7 +232,7 @@ def main() -> None:
     )
 
     loader_kwargs = {
-        "batch_size": model_config["batch_size"],
+        "batch_size": BATCH_SIZE,
         "num_workers": NUM_WORKERS,
         "pin_memory": device.type == "cuda",
     }
@@ -233,25 +244,27 @@ def main() -> None:
     val_loader = DataLoader(val_waveforms, shuffle=False, **loader_kwargs)
 
     frontend = LogMelFrontend(SAMPLE_RATE, N_MELS, HOP_LENGTH, N_FFT).to(device)
-    model = build_model(
-        model_name,
-        num_classes=len(GENRES),
-        n_mels=N_MELS,
-    ).to(device)
+    model = EfficientNetClassifier(num_classes=len(GENRES), pretrained=args.pretrained).to(device)
+    if args.pretrained and args.freeze_backbone_epochs > 0:
+        model.freeze_backbone()
+
     config = {
-        "model": model_name,
+        "model": "efficientnet",
         "val_ratio": VAL_RATIO,
         "train_samples": TRAIN_SAMPLES,
         "val_samples": VAL_SAMPLES,
-        "num_epochs": num_epochs,
-        "batch_size": model_config["batch_size"],
-        "learning_rate": model_config["learning_rate"],
+        "num_epochs": args.num_epochs,
+        "batch_size": BATCH_SIZE,
+        "learning_rate": LEARNING_RATE,
         "sample_rate": SAMPLE_RATE,
         "clip_seconds": CLIP_SECONDS,
         "n_mels": N_MELS,
         "hop_length": HOP_LENGTH,
         "n_fft": N_FFT,
         "num_workers": NUM_WORKERS,
+        "pretrained": args.pretrained,
+        "freeze_backbone_epochs": args.freeze_backbone_epochs,
+        "finetune_learning_rate": args.finetune_learning_rate,
     }
     train_model(
         frontend,
@@ -262,12 +275,14 @@ def main() -> None:
         config,
         args.run_name,
         device,
-        num_epochs=num_epochs,
-        learning_rate=model_config["learning_rate"],
+        num_epochs=args.num_epochs,
+        learning_rate=LEARNING_RATE,
         resume_from=args.resume_from.expanduser().resolve() if args.resume_from is not None else None,
+        unfreeze_epoch=args.freeze_backbone_epochs + 1 if args.freeze_backbone_epochs > 0 else None,
+        finetune_learning_rate=args.finetune_learning_rate,
     )
 
-    print(f"Saved {model_name.upper()} run to {output_dir}")
+    print(f"Saved EfficientNet run to {output_dir}")
 
 
 if __name__ == "__main__":
