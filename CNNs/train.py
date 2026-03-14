@@ -66,12 +66,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, default=Path("outputs"))
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--model", choices=sorted(MODEL_CONFIGS), required=True)
+    parser.add_argument("--num-epochs", type=int, default=None)
+    parser.add_argument("--resume-from", type=Path, default=None)
     return parser.parse_args()
 
 def main() -> None:
     args = parse_args()
     model_name = args.model
     model_config = MODEL_CONFIGS[model_name]
+    num_epochs = args.num_epochs or model_config["num_epochs"]
 
     seed_everything(SEED)
     output_dir = make_output_dir(args.output_root, args.run_name, model_config["default_prefix"])
@@ -122,7 +125,7 @@ def main() -> None:
         "val_ratio": VAL_RATIO,
         "train_samples": TRAIN_SAMPLES,
         "val_samples": VAL_SAMPLES,
-        "num_epochs": model_config["num_epochs"],
+        "num_epochs": num_epochs,
         "batch_size": model_config["batch_size"],
         "learning_rate": model_config["learning_rate"],
         "sample_rate": SAMPLE_RATE,
@@ -142,8 +145,9 @@ def main() -> None:
         config,
         args.run_name,
         device,
-        num_epochs=model_config["num_epochs"],
+        num_epochs=num_epochs,
         learning_rate=model_config["learning_rate"],
+        resume_from=args.resume_from.expanduser().resolve() if args.resume_from is not None else None,
         wandb_project=WANDB_PROJECT,
         wandb_entity=WANDB_ENTITY,
         wandb_mode=WANDB_MODE,

@@ -30,10 +30,10 @@ Scratch CNN on log-mel spectrograms, still trained on the same synthetic same-ge
 
 Proper synthetic data generation pipeline courtesy of https://github.com/Photon-08/milestone-4-codebase/tree/main. Now noise is properly factored in. Now all prior pipelines get a huge bump due to significantly better training data.
 
-CRNN code has been merged into the CNN pipeline and common utilites got extracted out and dropped in common. Code is a lot more structured. To recreate my run, use:
+CRNN code has been merged into the CNN pipeline and common utilites got extracted out and dropped in common. Code is a lot more structured. For all 3 models: CNN, CRNN, EfficientNET, use the following command to start a run:
 
 ```
-python -m DnG.cnn_crnn.train \
+python -m DnG.CNNs.train \
 --dataset-root DnG/messy_mashup \
 --output-root DnG/CNNs/outputs \
 --model cnn \

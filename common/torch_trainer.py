@@ -104,6 +104,7 @@ def train_model(
     *,
     num_epochs: int,
     learning_rate: float,
+    resume_from: Path | None,
     wandb_project: str,
     wandb_entity: str | None,
     wandb_mode: str,
@@ -129,8 +130,23 @@ def train_model(
     best_train_metrics: dict[str, float] | None = None
     best_val_metrics: dict[str, float] | None = None
     best_epoch = 0
+    start_epoch = 1
 
-    for epoch in range(1, num_epochs + 1):
+    if resume_from is not None:
+        checkpoint = torch.load(resume_from, map_location=device)
+        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+            model.load_state_dict(checkpoint["model_state_dict"])
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            start_epoch = int(checkpoint["epoch"]) + 1
+            best_epoch = int(checkpoint.get("best_epoch", 0))
+            best_train_metrics = checkpoint.get("best_train_metrics")
+            best_val_metrics = checkpoint.get("best_val_metrics")
+        else:
+            model.load_state_dict(checkpoint)
+        print(f"Resuming from {resume_from}")
+
+    for epoch in range(start_epoch, num_epochs + 1):
         epoch_start = time.time()
         train_loss_value, train_metrics = train_one_epoch(
             frontend,
@@ -167,6 +183,19 @@ def train_model(
             best_val_metrics = val_metrics
             best_epoch = epoch
             torch.save(model.state_dict(), output_dir / "model.pt")
+
+        torch.save(
+            {
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "best_epoch": best_epoch,
+                "best_train_metrics": best_train_metrics,
+                "best_val_metrics": best_val_metrics,
+            },
+            output_dir / "checkpoint.pt",
+        )
 
         if wandb_run is not None:
             wandb_run.log(
