@@ -62,6 +62,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--model", choices=sorted(MODEL_CONFIGS), required=True)
     parser.add_argument("--num-epochs", type=int, default=None)
+    parser.add_argument("--train-samples", type=int, default=TRAIN_SAMPLES)
+    parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--resume-from", type=Path, default=None)
     return parser.parse_args()
 
@@ -194,6 +196,7 @@ def main() -> None:
     model_name = args.model
     model_config = MODEL_CONFIGS[model_name]
     num_epochs = args.num_epochs or model_config["num_epochs"]
+    learning_rate = args.learning_rate or model_config["learning_rate"]
 
     seed_everything(SEED)
     output_dir = make_output_dir(args.output_root, args.run_name, model_name)
@@ -205,7 +208,7 @@ def main() -> None:
 
     train_waveforms = SyntheticMashupDataset(
         songs_by_genre=train_split,
-        num_samples=TRAIN_SAMPLES,
+        num_samples=args.train_samples,
         sample_rate=SAMPLE_RATE,
         clip_seconds=CLIP_SECONDS,
         seed=SEED,
@@ -241,11 +244,11 @@ def main() -> None:
     config = {
         "model": model_name,
         "val_ratio": VAL_RATIO,
-        "train_samples": TRAIN_SAMPLES,
+        "train_samples": args.train_samples,
         "val_samples": VAL_SAMPLES,
         "num_epochs": num_epochs,
         "batch_size": model_config["batch_size"],
-        "learning_rate": model_config["learning_rate"],
+        "learning_rate": learning_rate,
         "sample_rate": SAMPLE_RATE,
         "clip_seconds": CLIP_SECONDS,
         "n_mels": N_MELS,
@@ -263,7 +266,7 @@ def main() -> None:
         args.run_name,
         device,
         num_epochs=num_epochs,
-        learning_rate=model_config["learning_rate"],
+        learning_rate=learning_rate,
         resume_from=args.resume_from.expanduser().resolve() if args.resume_from is not None else None,
     )
 

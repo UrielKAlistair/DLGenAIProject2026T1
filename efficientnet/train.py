@@ -53,6 +53,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, default=Path("outputs"))
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--num-epochs", type=int, default=NUM_EPOCHS)
+    parser.add_argument("--train-samples", type=int, default=TRAIN_SAMPLES)
+    parser.add_argument("--learning-rate", type=float, default=LEARNING_RATE)
     parser.add_argument("--resume-from", type=Path, default=None)
     parser.add_argument("--pretrained", action="store_true")
     parser.add_argument("--freeze-backbone-epochs", type=int, default=0)
@@ -216,7 +218,7 @@ def main() -> None:
 
     train_waveforms = SyntheticMashupDataset(
         songs_by_genre=train_split,
-        num_samples=TRAIN_SAMPLES,
+        num_samples=args.train_samples,
         sample_rate=SAMPLE_RATE,
         clip_seconds=CLIP_SECONDS,
         seed=SEED,
@@ -251,11 +253,11 @@ def main() -> None:
     config = {
         "model": "efficientnet",
         "val_ratio": VAL_RATIO,
-        "train_samples": TRAIN_SAMPLES,
+        "train_samples": args.train_samples,
         "val_samples": VAL_SAMPLES,
         "num_epochs": args.num_epochs,
         "batch_size": BATCH_SIZE,
-        "learning_rate": LEARNING_RATE,
+        "learning_rate": args.learning_rate,
         "sample_rate": SAMPLE_RATE,
         "clip_seconds": CLIP_SECONDS,
         "n_mels": N_MELS,
@@ -276,7 +278,7 @@ def main() -> None:
         args.run_name,
         device,
         num_epochs=args.num_epochs,
-        learning_rate=LEARNING_RATE,
+        learning_rate=args.learning_rate,
         resume_from=args.resume_from.expanduser().resolve() if args.resume_from is not None else None,
         unfreeze_epoch=args.freeze_backbone_epochs + 1 if args.freeze_backbone_epochs > 0 else None,
         finetune_learning_rate=args.finetune_learning_rate,
