@@ -10,7 +10,6 @@ import numpy as np
 from sklearn.metrics import accuracy_score, f1_score
 
 from ..common.utils import (
-    DEFAULT_RANDOM_CROP,
     SyntheticMashupDataset,
     full_train_val,
     get_noise_paths,
@@ -125,7 +124,7 @@ def main() -> None:
         "synthetic_stem_gain_db_range": list(SyntheticMashupDataset.DEFAULT_STEM_GAIN_DB_RANGE),
         "synthetic_noise_count_range": list(SyntheticMashupDataset.DEFAULT_NOISE_COUNT_RANGE),
         "synthetic_noise_snr_db_range": list(SyntheticMashupDataset.DEFAULT_NOISE_SNR_DB_RANGE),
-        "synthetic_random_crop": DEFAULT_RANDOM_CROP,
+        "synthetic_random_crop": SyntheticMashupDataset.DEFAULT_RANDOM_CROP,
     }
 
     summary = {

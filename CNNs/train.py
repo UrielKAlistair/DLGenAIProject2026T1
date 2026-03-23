@@ -13,7 +13,6 @@ from ..common.features import LogMelFrontend
 from .models import build_model
 from ..common.torch_trainer import load_checkpoint, train_one_epoch, val_loss
 from ..common.utils import (
-    DEFAULT_RANDOM_CROP,
     GENRES,
     SyntheticMashupDataset,
     full_train_val,
@@ -274,7 +273,7 @@ def main() -> None:
         "synthetic_stem_gain_db_range": list(SyntheticMashupDataset.DEFAULT_STEM_GAIN_DB_RANGE),
         "synthetic_noise_count_range": list(SyntheticMashupDataset.DEFAULT_NOISE_COUNT_RANGE),
         "synthetic_noise_snr_db_range": list(SyntheticMashupDataset.DEFAULT_NOISE_SNR_DB_RANGE),
-        "synthetic_random_crop": DEFAULT_RANDOM_CROP,
+        "synthetic_random_crop": SyntheticMashupDataset.DEFAULT_RANDOM_CROP,
         "refresh_train_f1": args.refresh_train_f1,
     }
     train_model(

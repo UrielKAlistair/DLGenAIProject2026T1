@@ -29,7 +29,6 @@ GENRES = [
 ]
 
 STEM_NAMES = ("drums", "vocals", "bass", "other")
-DEFAULT_RANDOM_CROP = True
 _CLASS_DEFAULT = object()
 
 @dataclass(frozen=True)
@@ -189,6 +188,7 @@ class SyntheticMashupDataset(Dataset):
     DEFAULT_STEM_GAIN_DB_RANGE = (-4.0, 4.0)
     DEFAULT_NOISE_COUNT_RANGE = (1, 3)
     DEFAULT_NOISE_SNR_DB_RANGE = (6.0, 18.0)
+    DEFAULT_RANDOM_CROP = True
 
     def __init__(
         self,
@@ -201,7 +201,7 @@ class SyntheticMashupDataset(Dataset):
         stem_gain_db_range: tuple[float, float] | object = _CLASS_DEFAULT,
         noise_count_range: tuple[int, int] | object = _CLASS_DEFAULT,
         noise_snr_db_range: tuple[float, float] | None | object = _CLASS_DEFAULT,
-        random_crop: bool = DEFAULT_RANDOM_CROP,
+        random_crop: bool | object = _CLASS_DEFAULT,
     ) -> None:
         if stem_gain_db_range is _CLASS_DEFAULT:
             stem_gain_db_range = self.DEFAULT_STEM_GAIN_DB_RANGE
@@ -209,6 +209,8 @@ class SyntheticMashupDataset(Dataset):
             noise_count_range = self.DEFAULT_NOISE_COUNT_RANGE
         if noise_snr_db_range is _CLASS_DEFAULT:
             noise_snr_db_range = self.DEFAULT_NOISE_SNR_DB_RANGE
+        if random_crop is _CLASS_DEFAULT:
+            random_crop = self.DEFAULT_RANDOM_CROP
 
         self.songs_by_genre = songs_by_genre
         self.num_samples = num_samples
