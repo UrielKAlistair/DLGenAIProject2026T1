@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import librosa
 import numpy as np
 import torch
 from torch import nn
+
+import librosa
 
 
 class LogMelFrontend(nn.Module):

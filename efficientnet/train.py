@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 from ..common.features import LogMelFrontend
 from ..common.torch_trainer import load_checkpoint, train_one_epoch, val_loss
 from ..common.utils import (
+    DEFAULT_RANDOM_CROP,
     GENRES,
     SyntheticMashupDataset,
     full_train_val,
@@ -27,7 +28,7 @@ SAMPLE_RATE = 22050
 CLIP_SECONDS = 30.0
 SEED = 42
 
-WANDB_MODE = "online"
+WANDB_MODE = "offline"
 WANDB_PROJECT = "21f3002715-t12026"
 WANDB_ENTITY = "arvindanuk-indian-institute-of-technology-madras"
 
@@ -45,6 +46,7 @@ HOP_LENGTH = 512
 N_FFT = 2048
 NUM_WORKERS = min(8, os.cpu_count() or 1)
 PREFETCH_FACTOR = 2
+TRAIN_REFRESH_SEED_DELTA = 438_579_088
 
 
 def parse_args() -> argparse.Namespace:
@@ -54,18 +56,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--num-epochs", type=int, default=NUM_EPOCHS)
     parser.add_argument("--train-samples", type=int, default=TRAIN_SAMPLES)
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--learning-rate", type=float, default=LEARNING_RATE)
+    parser.add_argument("--num-workers", type=int, default=NUM_WORKERS)
     parser.add_argument("--resume-from", type=Path, default=None)
     parser.add_argument("--pretrained", action="store_true")
     parser.add_argument("--freeze-backbone-epochs", type=int, default=0)
     parser.add_argument("--finetune-learning-rate", type=float, default=FINETUNE_LEARNING_RATE)
+    parser.add_argument("--refresh-train-f1", type=float, default=0.95)
     return parser.parse_args()
 
 
 def train_model(
     frontend: nn.Module,
     model: EfficientNetClassifier,
+    train_dataset: SyntheticMashupDataset,
     train_loader: DataLoader,
+    train_loader_kwargs: dict[str, object],
     val_loader: DataLoader,
     output_dir: Path,
     config: dict[str, float | int | bool | str],
@@ -77,6 +84,7 @@ def train_model(
     resume_from: Path | None,
     unfreeze_epoch: int | None,
     finetune_learning_rate: float | None,
+    refresh_train_f1: float,
 ) -> None:
     optimizer = torch.optim.Adam(
         (parameter for parameter in model.parameters() if parameter.requires_grad),
@@ -102,7 +110,6 @@ def train_model(
     best_val_metrics: dict[str, float] | None = None
     best_epoch = 0
     start_epoch = 1
-
     if resume_from is not None:
         start_epoch, best_epoch, best_val_metrics = load_checkpoint(
             resume_from,
@@ -192,6 +199,17 @@ def train_model(
                 }
             )
 
+        if train_metrics["macro_f1"] >= refresh_train_f1:
+            new_seed = train_dataset.seed + TRAIN_REFRESH_SEED_DELTA
+            train_dataset.reseed(new_seed)
+            old_train_loader = train_loader
+            train_loader = DataLoader(train_dataset, shuffle=True, **train_loader_kwargs)
+            del old_train_loader
+            print(
+                "Refreshed synthetic training data "
+                f"after epoch {epoch} by reseeding train dataset to {new_seed}."
+            )
+
     summary = {
         "config": config,
         "best_epoch": best_epoch,
@@ -212,6 +230,7 @@ def main() -> None:
     output_dir = make_output_dir(args.output_root, args.run_name, "efficientnet_b0")
     dataset_root = args.dataset_root.expanduser().resolve()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
 
     train_split, val_split = full_train_val(dataset_root, VAL_RATIO, SEED)
     noise_paths = get_noise_paths(dataset_root)
@@ -234,11 +253,11 @@ def main() -> None:
     )
 
     loader_kwargs = {
-        "batch_size": BATCH_SIZE,
-        "num_workers": NUM_WORKERS,
+        "batch_size": args.batch_size,
+        "num_workers": args.num_workers,
         "pin_memory": device.type == "cuda",
     }
-    if NUM_WORKERS > 0:
+    if args.num_workers > 0:
         loader_kwargs["persistent_workers"] = True
         loader_kwargs["prefetch_factor"] = PREFETCH_FACTOR
 
@@ -256,22 +275,29 @@ def main() -> None:
         "train_samples": args.train_samples,
         "val_samples": VAL_SAMPLES,
         "num_epochs": args.num_epochs,
-        "batch_size": BATCH_SIZE,
+        "batch_size": args.batch_size,
         "learning_rate": args.learning_rate,
         "sample_rate": SAMPLE_RATE,
         "clip_seconds": CLIP_SECONDS,
         "n_mels": N_MELS,
         "hop_length": HOP_LENGTH,
         "n_fft": N_FFT,
-        "num_workers": NUM_WORKERS,
+        "num_workers": args.num_workers,
+        "synthetic_stem_gain_db_range": list(SyntheticMashupDataset.DEFAULT_STEM_GAIN_DB_RANGE),
+        "synthetic_noise_count_range": list(SyntheticMashupDataset.DEFAULT_NOISE_COUNT_RANGE),
+        "synthetic_noise_snr_db_range": list(SyntheticMashupDataset.DEFAULT_NOISE_SNR_DB_RANGE),
+        "synthetic_random_crop": DEFAULT_RANDOM_CROP,
         "pretrained": args.pretrained,
         "freeze_backbone_epochs": args.freeze_backbone_epochs,
         "finetune_learning_rate": args.finetune_learning_rate,
+        "refresh_train_f1": args.refresh_train_f1,
     }
     train_model(
         frontend,
         model,
+        train_waveforms,
         train_loader,
+        loader_kwargs,
         val_loader,
         output_dir,
         config,
@@ -282,6 +308,7 @@ def main() -> None:
         resume_from=args.resume_from.expanduser().resolve() if args.resume_from is not None else None,
         unfreeze_epoch=args.freeze_backbone_epochs + 1 if args.freeze_backbone_epochs > 0 else None,
         finetune_learning_rate=args.finetune_learning_rate,
+        refresh_train_f1=args.refresh_train_f1,
     )
 
     print(f"Saved EfficientNet run to {output_dir}")

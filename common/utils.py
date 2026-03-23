@@ -29,6 +29,8 @@ GENRES = [
 ]
 
 STEM_NAMES = ("drums", "vocals", "bass", "other")
+DEFAULT_RANDOM_CROP = True
+_CLASS_DEFAULT = object()
 
 @dataclass(frozen=True)
 class SongItem:
@@ -184,6 +186,10 @@ def fit_clip_for_inference(waveform: np.ndarray, sample_rate: int, clip_seconds:
 
 
 class SyntheticMashupDataset(Dataset):
+    DEFAULT_STEM_GAIN_DB_RANGE = (-4.0, 4.0)
+    DEFAULT_NOISE_COUNT_RANGE = (1, 3)
+    DEFAULT_NOISE_SNR_DB_RANGE = (6.0, 18.0)
+
     def __init__(
         self,
         songs_by_genre: Dict[str, List[SongItem]],
@@ -192,19 +198,39 @@ class SyntheticMashupDataset(Dataset):
         clip_seconds: float,
         seed: int,
         noise_paths: List[Path] | None = None,
+        stem_gain_db_range: tuple[float, float] | object = _CLASS_DEFAULT,
+        noise_count_range: tuple[int, int] | object = _CLASS_DEFAULT,
+        noise_snr_db_range: tuple[float, float] | None | object = _CLASS_DEFAULT,
+        random_crop: bool = DEFAULT_RANDOM_CROP,
     ) -> None:
+        if stem_gain_db_range is _CLASS_DEFAULT:
+            stem_gain_db_range = self.DEFAULT_STEM_GAIN_DB_RANGE
+        if noise_count_range is _CLASS_DEFAULT:
+            noise_count_range = self.DEFAULT_NOISE_COUNT_RANGE
+        if noise_snr_db_range is _CLASS_DEFAULT:
+            noise_snr_db_range = self.DEFAULT_NOISE_SNR_DB_RANGE
+
         self.songs_by_genre = songs_by_genre
         self.num_samples = num_samples
         self.sample_rate = sample_rate
         self.target_length = int(sample_rate * clip_seconds)
         self.seed = seed
         self.noise_paths = list(noise_paths or [])
+        self.stem_gain_db_range = stem_gain_db_range
+        self.noise_count_range = noise_count_range
+        self.noise_snr_db_range = noise_snr_db_range
+        self.random_crop = random_crop
         self.genre_names = [genre for genre, songs in songs_by_genre.items() if songs]
         if not self.genre_names:
             raise ValueError("SyntheticMashupDataset needs at least one genre with songs.")
+        if self.noise_count_range[0] < 0 or self.noise_count_range[0] > self.noise_count_range[1]:
+            raise ValueError("noise_count_range must satisfy 0 <= min <= max.")
 
     def __len__(self) -> int:
         return self.num_samples
+
+    def reseed(self, seed: int) -> None:
+        self.seed = int(seed)
 
     def _rng(self, index: int) -> random.Random:
         return random.Random(self.seed + 1009 * index)
@@ -214,18 +240,62 @@ class SyntheticMashupDataset(Dataset):
             return rng.sample(songs, len(STEM_NAMES))
         return [rng.choice(songs) for _ in STEM_NAMES]
 
+    def _fit_training_clip(self, waveform: torch.Tensor, rng: random.Random) -> torch.Tensor:
+        if waveform.numel() <= self.target_length:
+            return fit_clip(waveform, self.target_length)
+        if not self.random_crop:
+            return waveform[: self.target_length]
+
+        start_idx = rng.randint(0, waveform.numel() - self.target_length)
+        return waveform[start_idx : start_idx + self.target_length]
+
+    def _stem_gain(self, rng: random.Random) -> float:
+        min_db, max_db = self.stem_gain_db_range
+        if max_db <= min_db:
+            return 1.0
+        gain_db = rng.uniform(min_db, max_db)
+        return float(10.0 ** (gain_db / 20.0))
+
+    def _add_noise_clip_with_snr(
+        self,
+        mixed: torch.Tensor,
+        mix_rms: torch.Tensor,
+        noise: torch.Tensor,
+        rng: random.Random,
+    ) -> torch.Tensor:
+        if noise.numel() > self.target_length:
+            noise = self._fit_training_clip(noise, rng)
+
+        start_idx = rng.randint(0, self.target_length - noise.numel())
+        snr_db = rng.uniform(*self.noise_snr_db_range)
+        target_noise_rms = mix_rms / (10.0 ** (snr_db / 20.0))
+        noise_rms = noise.pow(2.0).mean().sqrt().clamp_min(1e-6)
+        scaled_noise = noise * (target_noise_rms / noise_rms)
+
+        mixed[start_idx : start_idx + noise.numel()] += scaled_noise
+        return mixed
+
     def _add_noise(self, mix: torch.Tensor, rng: random.Random) -> torch.Tensor:
         if not self.noise_paths:
             return mix
 
-        noise = load_audio(rng.choice(self.noise_paths), self.sample_rate)
-        if noise.numel() > self.target_length:
-            noise = noise[: self.target_length]
-
-        start_idx = rng.randint(0, self.target_length - noise.numel())
-        intensity = rng.uniform(0.1, 0.4)
         mixed = mix.clone()
-        mixed[start_idx : start_idx + noise.numel()] += noise * intensity
+        num_noises = rng.randint(*self.noise_count_range)
+        if num_noises == 0:
+            return mixed
+
+        mix_rms = mix.pow(2.0).mean().sqrt().clamp_min(1e-6)
+        for _ in range(num_noises):
+            noise = load_audio(rng.choice(self.noise_paths), self.sample_rate)
+            if self.noise_snr_db_range is None:
+                if noise.numel() > self.target_length:
+                    noise = noise[: self.target_length]
+                start_idx = rng.randint(0, self.target_length - noise.numel())
+                intensity = rng.uniform(0.1, 0.4)
+                mixed[start_idx : start_idx + noise.numel()] += noise * intensity
+                continue
+
+            mixed = self._add_noise_clip_with_snr(mixed, mix_rms, noise, rng)
         return mixed
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -237,16 +307,15 @@ class SyntheticMashupDataset(Dataset):
         stems: List[torch.Tensor] = []
         for song, stem_name in zip(chosen_songs, STEM_NAMES):
             waveform = load_audio(song.stem_paths[stem_name], self.sample_rate)
-            waveform = fit_clip(waveform, self.target_length)
-            stems.append(waveform)
+            stems.append(self._fit_training_clip(waveform, rng))
 
+        stems = [stem * self._stem_gain(rng) for stem in stems]
         mix = torch.stack(stems, dim=0).sum(dim=0)
         mix = self._add_noise(mix, rng)
         peak = mix.abs().max().clamp_min(1e-6)
         mix = mix / peak
         label = torch.tensor(GENRES.index(genre), dtype=torch.long)
         return mix.unsqueeze(0), label
-
 
 
 def init_wandb(

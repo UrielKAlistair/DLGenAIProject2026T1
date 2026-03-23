@@ -13,6 +13,7 @@ from ..common.features import LogMelFrontend
 from .models import build_model
 from ..common.torch_trainer import load_checkpoint, train_one_epoch, val_loss
 from ..common.utils import (
+    DEFAULT_RANDOM_CROP,
     GENRES,
     SyntheticMashupDataset,
     full_train_val,
@@ -26,8 +27,9 @@ from ..common.utils import (
 SAMPLE_RATE = 22050
 CLIP_SECONDS = 30.0
 SEED = 42
+TRAIN_REFRESH_SEED_DELTA = 438_579_088
 
-WANDB_MODE = "online"
+WANDB_MODE = "offline"
 WANDB_PROJECT = "21f3002715-t12026"
 WANDB_ENTITY = "arvindanuk-indian-institute-of-technology-madras"
 
@@ -65,13 +67,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-samples", type=int, default=TRAIN_SAMPLES)
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--resume-from", type=Path, default=None)
+    parser.add_argument("--refresh-train-f1", type=float, default=0.95)
     return parser.parse_args()
 
 
 def train_model(
     frontend: nn.Module,
     model: nn.Module,
+    train_dataset: SyntheticMashupDataset,
     train_loader: DataLoader,
+    train_loader_kwargs: dict[str, object],
     val_loader: DataLoader,
     output_dir: Path,
     config: dict[str, float | int | str],
@@ -81,6 +86,7 @@ def train_model(
     num_epochs: int,
     learning_rate: float,
     resume_from: Path | None,
+    refresh_train_f1: float,
 ) -> None:
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.CrossEntropyLoss()
@@ -103,7 +109,6 @@ def train_model(
     best_val_metrics: dict[str, float] | None = None
     best_epoch = 0
     start_epoch = 1
-
     if resume_from is not None:
         start_epoch, best_epoch, best_val_metrics = load_checkpoint(
             resume_from,
@@ -176,6 +181,17 @@ def train_model(
                     "learning_rate": optimizer.param_groups[0]["lr"],
                     "epoch_seconds": epoch_seconds,
                 }
+            )
+
+        if train_metrics["macro_f1"] >= refresh_train_f1:
+            new_seed = train_dataset.seed + TRAIN_REFRESH_SEED_DELTA
+            train_dataset.reseed(new_seed)
+            old_train_loader = train_loader
+            train_loader = DataLoader(train_dataset, shuffle=True, **train_loader_kwargs)
+            del old_train_loader
+            print(
+                "Refreshed synthetic training data "
+                f"after epoch {epoch} by reseeding train dataset to {new_seed}."
             )
 
     summary = {
@@ -255,11 +271,18 @@ def main() -> None:
         "hop_length": HOP_LENGTH,
         "n_fft": N_FFT,
         "num_workers": NUM_WORKERS,
+        "synthetic_stem_gain_db_range": list(SyntheticMashupDataset.DEFAULT_STEM_GAIN_DB_RANGE),
+        "synthetic_noise_count_range": list(SyntheticMashupDataset.DEFAULT_NOISE_COUNT_RANGE),
+        "synthetic_noise_snr_db_range": list(SyntheticMashupDataset.DEFAULT_NOISE_SNR_DB_RANGE),
+        "synthetic_random_crop": DEFAULT_RANDOM_CROP,
+        "refresh_train_f1": args.refresh_train_f1,
     }
     train_model(
         frontend,
         model,
+        train_waveforms,
         train_loader,
+        loader_kwargs,
         val_loader,
         output_dir,
         config,
@@ -268,6 +291,7 @@ def main() -> None:
         num_epochs=num_epochs,
         learning_rate=learning_rate,
         resume_from=args.resume_from.expanduser().resolve() if args.resume_from is not None else None,
+        refresh_train_f1=args.refresh_train_f1,
     )
 
     print(f"Saved {model_name.upper()} run to {output_dir}")

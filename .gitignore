@@ -1,7 +1,7 @@
 __pycache__/
 jan-2026-dl-gen-ai-project/
-outputs/
+artifacts/
 logs/
 *.pyc
 .vscode/
-wandb/
+outputs/

@@ -10,12 +10,12 @@ import numpy as np
 from tqdm import tqdm
 
 try:
-    from ..common.utils import GENRES, load_audio
+    from ..common.utils import GENRES, fit_clip_for_inference, load_audio
 except ImportError:
     import sys
 
     sys.path.append(str(Path(__file__).resolve().parents[1]))
-    from common.utils import GENRES, load_audio
+    from common.utils import GENRES, fit_clip_for_inference, load_audio
 
 SAMPLE_RATE = 22050
 CLIP_SECONDS = 30.0
@@ -36,21 +36,6 @@ def parse_args() -> argparse.Namespace:
         default=Path("DnG/mmfc_trees/outputs/mfcc_catboost_v1/submission.csv"),
     )
     return parser.parse_args()
-
-
-def fit_clip_for_inference(waveform: np.ndarray, sample_rate: int, clip_seconds: float) -> np.ndarray:
-    target_length = int(sample_rate * clip_seconds)
-    if waveform.shape[0] == target_length:
-        return waveform
-
-    if waveform.shape[0] < target_length:
-        repeats = (target_length + waveform.shape[0] - 1) // waveform.shape[0]
-        waveform = np.tile(waveform, repeats)
-        return waveform[:target_length]
-
-    start = (waveform.shape[0] - target_length) // 2
-    return waveform[start : start + target_length]
-
 
 def extract_features(waveform: np.ndarray, sample_rate: int, n_mfcc: int) -> np.ndarray:
     mfcc = librosa.feature.mfcc(y=waveform, sr=sample_rate, n_mfcc=n_mfcc)

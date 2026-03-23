@@ -53,7 +53,12 @@ def train_one_epoch(
     all_targets: list[int] = []
     all_predictions: list[int] = []
 
-    progress = tqdm(loader, desc=f"train {epoch}/{num_epochs}", leave=False, unit="batch")
+    progress = tqdm(
+        loader,
+        desc=f"train {epoch}/{num_epochs}",
+        leave=False,
+        unit="batch",
+    )
     for inputs, targets in progress:
         inputs = inputs.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
@@ -91,7 +96,12 @@ def val_loss(
     all_targets: list[int] = []
     all_predictions: list[int] = []
 
-    progress = tqdm(loader, desc=f"val {epoch}/{num_epochs}", leave=False, unit="batch")
+    progress = tqdm(
+        loader,
+        desc=f"val {epoch}/{num_epochs}",
+        leave=False,
+        unit="batch",
+    )
     for inputs, targets in progress:
         inputs = inputs.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
