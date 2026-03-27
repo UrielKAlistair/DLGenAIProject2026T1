@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import numpy as np
 import torch
 from torch import nn
 
-import librosa
+from torchaudio.functional import melscale_fbanks
 
 
 class LogMelFrontend(nn.Module):
@@ -14,13 +13,77 @@ class LogMelFrontend(nn.Module):
         n_mels: int,
         hop_length: int,
         n_fft: int = 2048,
+        specaugment_enabled: bool = False,
+        time_mask_param: int = 24,
+        freq_mask_param: int = 12,
+        num_time_masks: int = 2,
+        num_freq_masks: int = 2,
     ) -> None:
         super().__init__()
-        mel_filter = librosa.filters.mel(sr=sample_rate, n_fft=n_fft, n_mels=n_mels).astype(np.float32)
         self.hop_length = hop_length
         self.n_fft = n_fft
-        self.register_buffer("mel_filter", torch.from_numpy(mel_filter))
+        self.specaugment_enabled = specaugment_enabled
+        self.time_mask_param = max(0, int(time_mask_param))
+        self.freq_mask_param = max(0, int(freq_mask_param))
+        self.num_time_masks = max(0, int(num_time_masks))
+        self.num_freq_masks = max(0, int(num_freq_masks))
+        mel_filter = melscale_fbanks(
+            n_freqs=(n_fft // 2) + 1,
+            f_min=0.0,
+            f_max=float(sample_rate // 2),
+            n_mels=n_mels,
+            sample_rate=sample_rate,
+        ).transpose(0, 1)
+        self.register_buffer("mel_filter", mel_filter)
         self.register_buffer("window", torch.hann_window(n_fft))
+
+    def _apply_masks(
+        self,
+        augmented: torch.Tensor,
+        batch_index: int,
+        axis_size: int,
+        mask_param: int,
+        num_masks: int,
+        axis: int,
+    ) -> None:
+        max_width = min(mask_param, axis_size)
+        if max_width <= 0:
+            return
+
+        for _ in range(num_masks):
+            width = int(torch.randint(0, max_width + 1, (1,), device=augmented.device).item())
+            if width == 0:
+                continue
+
+            start = int(torch.randint(0, axis_size - width + 1, (1,), device=augmented.device).item())
+            if axis == 1:
+                augmented[batch_index, start : start + width, :] = 0.0
+            else:
+                augmented[batch_index, :, start : start + width] = 0.0
+
+    def _apply_specaugment(self, log_mel: torch.Tensor) -> torch.Tensor:
+        augmented = log_mel.clone()
+        _, n_mels, n_frames = augmented.shape
+
+        for batch_index in range(augmented.shape[0]):
+            self._apply_masks(
+                augmented,
+                batch_index,
+                n_mels,
+                self.freq_mask_param,
+                self.num_freq_masks,
+                axis=1,
+            )
+            self._apply_masks(
+                augmented,
+                batch_index,
+                n_frames,
+                self.time_mask_param,
+                self.num_time_masks,
+                axis=2,
+            )
+
+        return augmented
 
     def forward(self, waveforms: torch.Tensor) -> torch.Tensor:
         if waveforms.ndim == 3:
@@ -39,4 +102,7 @@ class LogMelFrontend(nn.Module):
         log_mel = log_mel - log_mel.amax(dim=(-2, -1), keepdim=True)
         mean = log_mel.mean(dim=(-2, -1), keepdim=True)
         std = log_mel.std(dim=(-2, -1), keepdim=True).clamp_min(1e-6)
-        return ((log_mel - mean) / std).unsqueeze(1)
+        normalized = (log_mel - mean) / std
+        if self.training and self.specaugment_enabled:
+            normalized = self._apply_specaugment(normalized)
+        return normalized.unsqueeze(1)
