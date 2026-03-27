@@ -37,17 +37,22 @@ def load_checkpoint(
     return 1, 0, None
 
 
-def train_one_epoch(
+def run_epoch(
     frontend: nn.Module,
     model: nn.Module,
     loader: DataLoader,
     criterion: nn.Module,
-    optimizer: torch.optim.Optimizer,
+    optimizer: torch.optim.Optimizer | None,
     device: torch.device,
     epoch: int,
     num_epochs: int,
+    mode: str,
 ) -> tuple[float, dict[str, float]]:
-    model.train()
+    is_training = optimizer is not None
+    frontend.train(is_training)
+    model.train(is_training)
+    use_bf16 = device.type == "cuda"
+
     total_loss = 0.0
     total_items = 0
     all_targets: list[int] = []
@@ -55,59 +60,23 @@ def train_one_epoch(
 
     progress = tqdm(
         loader,
-        desc=f"train {epoch}/{num_epochs}",
+        desc=f"{mode} {epoch}/{num_epochs}",
         leave=False,
         unit="batch",
     )
     for inputs, targets in progress:
         inputs = inputs.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
-        optimizer.zero_grad()
-        inputs = frontend(inputs)
-        logits = model(inputs)
-        loss = criterion(logits, targets)
-        loss.backward()
-        optimizer.step()
 
-        total_loss += float(loss.item()) * targets.size(0)
-        total_items += int(targets.size(0))
-        predictions = logits.argmax(dim=1)
-        all_targets.extend(targets.cpu().tolist())
-        all_predictions.extend(predictions.cpu().tolist())
-        progress.set_postfix(loss=f"{loss.item():.4f}")
-
-    epoch_loss = total_loss / max(total_items, 1)
-    return epoch_loss, metrics(all_targets, all_predictions)
-
-
-@torch.no_grad()
-def val_loss(
-    frontend: nn.Module,
-    model: nn.Module,
-    loader: DataLoader,
-    criterion: nn.Module,
-    device: torch.device,
-    epoch: int,
-    num_epochs: int,
-) -> tuple[float, dict[str, float]]:
-    model.eval()
-    total_loss = 0.0
-    total_items = 0
-    all_targets: list[int] = []
-    all_predictions: list[int] = []
-
-    progress = tqdm(
-        loader,
-        desc=f"val {epoch}/{num_epochs}",
-        leave=False,
-        unit="batch",
-    )
-    for inputs, targets in progress:
-        inputs = inputs.to(device, non_blocking=True)
-        targets = targets.to(device, non_blocking=True)
-        inputs = frontend(inputs)
-        logits = model(inputs)
-        loss = criterion(logits, targets)
+        with torch.set_grad_enabled(is_training):
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_bf16):
+                if is_training:
+                    optimizer.zero_grad(set_to_none=True)
+                logits = model(frontend(inputs))
+                loss = criterion(logits, targets)
+                if is_training:
+                    loss.backward()
+                    optimizer.step()
 
         total_loss += float(loss.item()) * targets.size(0)
         total_items += int(targets.size(0))
