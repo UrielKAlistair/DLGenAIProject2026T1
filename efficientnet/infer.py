@@ -5,12 +5,11 @@ import csv
 import json
 from pathlib import Path
 
-import numpy as np
 import torch
 from tqdm import tqdm
 
 from ..common.features import LogMelFrontend
-from ..common.utils import GENRES, fit_clip_for_inference, load_audio
+from ..common.utils import CLIP_SECONDS, GENRES, SAMPLE_RATE, fit_clip, load_audio
 from .model import EfficientNetClassifier
 
 
@@ -21,6 +20,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--summary-path", type=Path, required=True)
     parser.add_argument("--output-path", type=Path, required=True)
     return parser.parse_args()
+
+
 def main() -> None:
     args = parse_args()
     dataset_root = args.dataset_root.expanduser().resolve()
@@ -47,11 +48,11 @@ def main() -> None:
     with (dataset_root / "test.csv").open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
 
+    target_length = int(SAMPLE_RATE * CLIP_SECONDS)
     predictions = []
     for row in tqdm(rows, desc="Inference", unit="file"):
-        waveform = load_audio(dataset_root / row["filename"], int(config["sample_rate"])).numpy()
-        waveform = fit_clip_for_inference(waveform, int(config["sample_rate"]), float(config["clip_seconds"]))
-        waveform_tensor = torch.from_numpy(waveform.astype(np.float32)).unsqueeze(0).to(device)
+        waveform = load_audio(dataset_root / row["filename"], SAMPLE_RATE)
+        waveform_tensor = fit_clip(waveform, target_length).unsqueeze(0).to(device)
 
         with torch.no_grad():
             logits = model(frontend(waveform_tensor))

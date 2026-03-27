@@ -5,32 +5,24 @@ import pickle
 from pathlib import Path
 
 from catboost import CatBoostClassifier
-import librosa
 import numpy as np
 from sklearn.metrics import accuracy_score, f1_score
+import torch
+from torchaudio import transforms
+from torchaudio.functional import compute_deltas
 
 from ..common.utils import (
+    CLIP_SECONDS,
+    SAMPLE_RATE,
     SyntheticMashupDataset,
-    full_train_val,
-    get_noise_paths,
     init_wandb,
+    load_train_val_datasets,
     make_output_dir,
     save_json,
     seed_everything,
 )
 
-SAMPLE_RATE = 22050
-CLIP_SECONDS = 30.0
 SEED = 42
-
-WANDB_MODE = "offline"
-WANDB_PROJECT = "21f3002715-t12026"
-WANDB_ENTITY = "arvindanuk-indian-institute-of-technology-madras"
-
-# Worth Playing with these:
-VAL_RATIO = 0.2
-TRAIN_SAMPLES = 1500
-VAL_SAMPLES = 400
 
 N_MFCC = 40
 N_ESTIMATORS = 300
@@ -38,24 +30,26 @@ N_ESTIMATORS = 300
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train an MFCC baseline on synthetic mashups.")
-    parser.add_argument("--dataset-root", type=Path, required=True)
+    parser.add_argument("--train-dir", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, default=Path("outputs"))
     parser.add_argument("--run-name", type=str, default=None)
+    parser.add_argument("--train-samples", type=int, default=1500)
+    parser.add_argument("--val-samples", type=int, default=400)
     return parser.parse_args()
-
-
-def extract_features(dataset: SyntheticMashupDataset, sample_rate: int, n_mfcc: int) -> tuple[np.ndarray, np.ndarray]:
+def extract_features(
+    dataset: SyntheticMashupDataset,
+    mfcc_transform: transforms.MFCC,
+) -> tuple[np.ndarray, np.ndarray]:
     features = []
     labels = []
 
     for index in range(len(dataset)):
         waveform, label = dataset[index]
-        waveform_np = waveform.squeeze(0).numpy()
-        mfcc = librosa.feature.mfcc(y=waveform_np, sr=sample_rate, n_mfcc=n_mfcc)
-        delta = librosa.feature.delta(mfcc)
-        stacked = np.concatenate([mfcc, delta], axis=0)
-        feature_vector = np.concatenate([stacked.mean(axis=1), stacked.std(axis=1)], axis=0).astype(np.float32)
-        features.append(feature_vector)
+        mfcc = mfcc_transform(waveform).squeeze(0)
+        delta = compute_deltas(mfcc.unsqueeze(0)).squeeze(0)
+        stacked = torch.cat([mfcc, delta], dim=0)
+        feature_vector = torch.cat([stacked.mean(dim=1), stacked.std(dim=1)], dim=0)
+        features.append(feature_vector.numpy().astype(np.float32))
         labels.append(int(label.item()))
 
     return np.stack(features), np.array(labels, dtype=np.int64)
@@ -72,31 +66,17 @@ def main() -> None:
     args = parse_args()
     seed_everything(SEED)
     output_dir = make_output_dir(args.output_root, args.run_name, "mfcc_catboost")
-    dataset_root = args.dataset_root.expanduser().resolve()
-
-    train_split, val_split = full_train_val(dataset_root, VAL_RATIO, SEED)
-    noise_paths = get_noise_paths(dataset_root)
-
-    train_dataset = SyntheticMashupDataset(
-        songs_by_genre=train_split,
-        num_samples=TRAIN_SAMPLES,
-        sample_rate=SAMPLE_RATE,
-        clip_seconds=CLIP_SECONDS,
-        seed=SEED,
-        noise_paths=noise_paths,
-    )
-    val_dataset = SyntheticMashupDataset(
-        songs_by_genre=val_split,
-        num_samples=VAL_SAMPLES,
-        sample_rate=SAMPLE_RATE,
-        clip_seconds=CLIP_SECONDS,
-        seed=SEED + 999,
-        noise_paths=noise_paths,
+    train_dir = args.train_dir.expanduser().resolve()
+    train_dataset, val_dataset = load_train_val_datasets(
+        train_dir,
+        train_samples=args.train_samples,
+        val_samples=args.val_samples,
     )
 
     print("Extracting MFCC features...")
-    x_train, y_train = extract_features(train_dataset, SAMPLE_RATE, N_MFCC)
-    x_val, y_val = extract_features(val_dataset, SAMPLE_RATE, N_MFCC)
+    mfcc_transform = transforms.MFCC(sample_rate=SAMPLE_RATE, n_mfcc=N_MFCC)
+    x_train, y_train = extract_features(train_dataset, mfcc_transform)
+    x_val, y_val = extract_features(val_dataset, mfcc_transform)
 
     model = CatBoostClassifier(
         iterations=N_ESTIMATORS,
@@ -118,9 +98,9 @@ def main() -> None:
     # Just Logging beyond here.
     
     config = {
-        "val_ratio": VAL_RATIO,
-        "train_samples": TRAIN_SAMPLES,
-        "val_samples": VAL_SAMPLES,
+        "train_samples": args.train_samples,
+        "val_samples": args.val_samples,
+        "synthetic_train_dir": str(train_dir),
         "synthetic_stem_gain_db_range": list(SyntheticMashupDataset.DEFAULT_STEM_GAIN_DB_RANGE),
         "synthetic_noise_count_range": list(SyntheticMashupDataset.DEFAULT_NOISE_COUNT_RANGE),
         "synthetic_noise_snr_db_range": list(SyntheticMashupDataset.DEFAULT_NOISE_SNR_DB_RANGE),
@@ -135,9 +115,6 @@ def main() -> None:
     save_json(output_dir / "summary.json", summary)
 
     wandb_run = init_wandb(
-        project=WANDB_PROJECT,
-        entity=WANDB_ENTITY,
-        mode=WANDB_MODE,
         run_name=args.run_name,
         config=config,
         output_dir=output_dir,
