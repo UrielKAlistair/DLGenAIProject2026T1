@@ -23,10 +23,10 @@ class LogMelFrontend(nn.Module):
         self.hop_length = hop_length
         self.n_fft = n_fft
         self.specaugment_enabled = specaugment_enabled
-        self.time_mask_param = max(0, int(time_mask_param))
-        self.freq_mask_param = max(0, int(freq_mask_param))
-        self.num_time_masks = max(0, int(num_time_masks))
-        self.num_freq_masks = max(0, int(num_freq_masks))
+        self.time_mask_param = time_mask_param
+        self.freq_mask_param = freq_mask_param
+        self.num_time_masks = num_time_masks
+        self.num_freq_masks = num_freq_masks
         mel_filter = melscale_fbanks(
             n_freqs=(n_fft // 2) + 1,
             f_min=0.0,

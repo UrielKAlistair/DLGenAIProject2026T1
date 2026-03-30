@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import time
 from pathlib import Path
@@ -44,6 +45,23 @@ def seed_everything(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = False
     torch.backends.cudnn.benchmark = True
+
+
+def get_recommended_num_workers(*, preload_to_ram: bool = False) -> int:
+    if preload_to_ram:
+        return 0
+
+    slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
+    if slurm_cpus is not None:
+        try:
+            return max(1, int(slurm_cpus))
+        except ValueError:
+            pass
+
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:
+        return max(1, os.cpu_count() or 1)
 
 
 def make_output_dir(output_root: Path, run_name: str | None, default_prefix: str) -> Path:

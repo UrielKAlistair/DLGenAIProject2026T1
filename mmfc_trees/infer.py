@@ -20,6 +20,9 @@ except ImportError:
     from common.utils import CLIP_SECONDS, GENRES, SAMPLE_RATE, fit_clip, load_audio
 
 N_MFCC = 40
+N_MELS = 128
+N_FFT = 2048
+HOP_LENGTH = 512
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,6 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-path", type=Path, required=True)
     parser.add_argument("--output-path", type=Path, required=True)
     return parser.parse_args()
+
+
 def extract_features(waveform: torch.Tensor, mfcc_transform: transforms.MFCC) -> np.ndarray:
     mfcc = mfcc_transform(waveform.unsqueeze(0)).squeeze(0)
     delta = compute_deltas(mfcc.unsqueeze(0)).squeeze(0)
@@ -44,7 +49,15 @@ def main() -> None:
 
     with model_path.open("rb") as handle:
         model = pickle.load(handle)
-    mfcc_transform = transforms.MFCC(sample_rate=SAMPLE_RATE, n_mfcc=N_MFCC)
+    mfcc_transform = transforms.MFCC(
+        sample_rate=SAMPLE_RATE,
+        n_mfcc=N_MFCC,
+        melkwargs={
+            "n_fft": N_FFT,
+            "hop_length": HOP_LENGTH,
+            "n_mels": N_MELS,
+        },
+    )
 
     test_csv_path = dataset_root / "test.csv"
     predictions = []
