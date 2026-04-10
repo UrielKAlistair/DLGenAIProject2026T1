@@ -38,7 +38,6 @@ RANDOM_STRENGTH = 2.0
 BAGGING_TEMPERATURE = 1.0
 EARLY_STOPPING_ROUNDS = 100
 FEATURE_BATCH_SIZE = 128
-NUM_WORKERS = 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,7 +59,6 @@ def extract_features(
     loader_kwargs = {
         "batch_size": FEATURE_BATCH_SIZE,
         "shuffle": False,
-        "num_workers": NUM_WORKERS,
         "pin_memory": device.type == "cuda",
     }
 
@@ -100,7 +98,6 @@ def main() -> None:
         train_dir,
         train_samples=args.train_samples,
         val_samples=args.val_samples,
-        preload_to_ram=False,
     )
 
     print("Extracting MFCC features...")
@@ -168,7 +165,6 @@ def main() -> None:
         "bagging_temperature": BAGGING_TEMPERATURE,
         "early_stopping_rounds": EARLY_STOPPING_ROUNDS,
         "feature_batch_size": FEATURE_BATCH_SIZE,
-        "feature_num_workers": NUM_WORKERS,
         "device": device.type,
         "catboost_task_type": model.get_param("task_type") or "CPU",
         "synthetic_train_dir": str(train_dir),

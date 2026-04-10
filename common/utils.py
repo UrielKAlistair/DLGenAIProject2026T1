@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import random
 import time
 from pathlib import Path
@@ -40,28 +39,16 @@ def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    if hasattr(torch, "set_float32_matmul_precision"):
+        torch.set_float32_matmul_precision("high")
+    if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+        torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = False
     torch.backends.cudnn.benchmark = True
-
-
-def get_recommended_num_workers(*, preload_to_ram: bool = False) -> int:
-    if preload_to_ram:
-        return 0
-
-    slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
-    if slurm_cpus is not None:
-        try:
-            return max(1, int(slurm_cpus))
-        except ValueError:
-            pass
-
-    try:
-        return max(1, len(os.sched_getaffinity(0)))
-    except AttributeError:
-        return max(1, os.cpu_count() or 1)
 
 
 def make_output_dir(output_root: Path, run_name: str | None, default_prefix: str) -> Path:
@@ -116,40 +103,47 @@ class SyntheticMashupDataset(Dataset):
     def __init__(
         self,
         dataset_dir: Path,
+        split_name: str,
         sample_indices: list[int],
-        preload_to_ram: bool = True,
     ) -> None:
         self.dataset_dir = dataset_dir
+        self.split_name = split_name
         self.sample_indices = sample_indices
-        self.preload_to_ram = preload_to_ram
         if not self.dataset_dir.exists():
             raise FileNotFoundError(
                 f"Missing synthetic train-data directory: {self.dataset_dir}. "
                 "Run `python -m DnG.common.build_train_data` first."
             )
         self.tensor_cache: tuple[torch.Tensor, torch.Tensor] | None = None
-        if self.preload_to_ram:
-            self.tensor_cache = self._load_dataset_tensors(mmap=False)
 
     def __len__(self) -> int:
         return len(self.sample_indices)
 
     def _data_file(self) -> Path:
-        return self.dataset_dir / "data.pt"
+        preferred_name = "val.pt" if self.split_name == "val" else "data.pt"
+        preferred_path = self.dataset_dir / preferred_name
+        if preferred_path.exists():
+            return preferred_path
 
-    def _load_dataset_tensors(self, *, mmap: bool) -> tuple[torch.Tensor, torch.Tensor]:
+        legacy_path = self.dataset_dir / "data.pt"
+        if legacy_path.exists():
+            return legacy_path
+
+        return preferred_path
+
+    def _load_dataset_tensors(self) -> tuple[torch.Tensor, torch.Tensor]:
         data_file = self._data_file()
         if not data_file.exists():
             raise FileNotFoundError(
                 f"Missing synthetic train-data file: {data_file}. "
                 "Run `python -m DnG.common.build_train_data` first."
             )
-        payload = torch.load(data_file, map_location="cpu", weights_only=True, mmap=mmap)
+        payload = torch.load(data_file, map_location="cpu", weights_only=True, mmap=True)
         return payload["waveforms"], payload["labels"]
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
         if self.tensor_cache is None:
-            self.tensor_cache = self._load_dataset_tensors(mmap=not self.preload_to_ram)
+            self.tensor_cache = self._load_dataset_tensors()
         waveforms, labels = self.tensor_cache
         sample_index = self.sample_indices[index]
         return waveforms[sample_index], labels[sample_index]
@@ -160,7 +154,6 @@ def load_dataset(
     split_name: str,
     *,
     requested_num_samples: int,
-    preload_to_ram: bool = True,
 ) -> SyntheticMashupDataset:
     manifest_path = train_dir / f"{split_name}.json"
     if not manifest_path.exists():
@@ -198,8 +191,8 @@ def load_dataset(
         sample_indices = sorted(subset_rng.sample(range(cached_num_samples), requested_num_samples))
     return SyntheticMashupDataset(
         dataset_dir=dataset_dir,
+        split_name=split_name,
         sample_indices=sample_indices,
-        preload_to_ram=preload_to_ram,
     )
 
 
@@ -208,19 +201,16 @@ def load_train_val_datasets(
     *,
     train_samples: int,
     val_samples: int,
-    preload_to_ram: bool = True,
 ) -> tuple[SyntheticMashupDataset, SyntheticMashupDataset]:
     train_dataset = load_dataset(
         train_dir,
         "train",
         requested_num_samples=train_samples,
-        preload_to_ram=preload_to_ram,
     )
     val_dataset = load_dataset(
         train_dir,
         "val",
         requested_num_samples=val_samples,
-        preload_to_ram=preload_to_ram,
     )
     return train_dataset, val_dataset
 

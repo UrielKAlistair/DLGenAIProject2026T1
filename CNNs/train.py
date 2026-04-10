@@ -16,7 +16,6 @@ from ..common.utils import (
     GENRES,
     SAMPLE_RATE,
     SyntheticMashupDataset,
-    get_recommended_num_workers,
     init_wandb,
     load_train_val_datasets,
     make_output_dir,
@@ -34,9 +33,6 @@ TIME_MASK_PARAM = 24
 FREQ_MASK_PARAM = 12
 NUM_TIME_MASKS = 2
 NUM_FREQ_MASKS = 2
-PRELOAD_TO_RAM = True
-NUM_WORKERS = get_recommended_num_workers(preload_to_ram=PRELOAD_TO_RAM)
-PREFETCH_FACTOR = 2
 
 
 def parse_args() -> argparse.Namespace:
@@ -70,16 +66,11 @@ def main() -> None:
         train_dir,
         train_samples=args.train_samples,
         val_samples=args.val_samples,
-        preload_to_ram=PRELOAD_TO_RAM,
     )
     loader_kwargs = {
         "batch_size": args.batch_size,
-        "num_workers": NUM_WORKERS,
         "pin_memory": device.type == "cuda",
     }
-    if NUM_WORKERS > 0:
-        loader_kwargs["persistent_workers"] = True
-        loader_kwargs["prefetch_factor"] = PREFETCH_FACTOR
 
     train_loader = DataLoader(train_waveforms, shuffle=True, **loader_kwargs)
     val_loader = DataLoader(val_waveforms, shuffle=False, **loader_kwargs)
@@ -119,8 +110,6 @@ def main() -> None:
         "freq_mask_param": FREQ_MASK_PARAM,
         "num_time_masks": NUM_TIME_MASKS,
         "num_freq_masks": NUM_FREQ_MASKS,
-        "preload_to_ram": PRELOAD_TO_RAM,
-        "num_workers": NUM_WORKERS,
         "synthetic_train_dir": str(train_dir),
         "synthetic_stem_gain_db_range": list(SyntheticMashupDataset.DEFAULT_STEM_GAIN_DB_RANGE),
         "synthetic_noise_count_range": list(SyntheticMashupDataset.DEFAULT_NOISE_COUNT_RANGE),
