@@ -153,10 +153,7 @@ def build_dataset(
             rng = random.Random(seed + 1009 * sample_index)
             genre = nonempty_genres[sample_index % len(nonempty_genres)]
             songs = songs_by_genre[genre]
-            if len(songs) >= len(STEM_NAMES):
-                chosen_songs = rng.sample(songs, len(STEM_NAMES))
-            else:
-                chosen_songs = [rng.choice(songs) for _ in STEM_NAMES]
+            chosen_songs = rng.sample(songs, len(STEM_NAMES))
 
             stems = []
             for song, stem_name in zip(chosen_songs, STEM_NAMES):
